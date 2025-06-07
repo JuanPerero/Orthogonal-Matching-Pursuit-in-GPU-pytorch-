@@ -1,0 +1,14 @@
+README.md
+setup.py
+ompingpu/Funciones.py
+ompingpu/__init__.py
+ompingpu/omp.py
+ompingpu.egg-info/PKG-INFO
+ompingpu.egg-info/SOURCES.txt
+ompingpu.egg-info/dependency_links.txt
+ompingpu.egg-info/not-zip-safe
+ompingpu.egg-info/requires.txt
+ompingpu.egg-info/top_level.txt
+ompingpu/cuda/__init__.py
+ompingpu/cuda/inverse_omp.cpp
+ompingpu/cuda/step_cholesky_kernel.cu
