@@ -91,7 +91,7 @@ def omp_v4(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
         if k:          
             w =  tc.bmm(Linv[end_n,:k,:k],XTX[sets[k, end_n].unsqueeze(1).expand(-1, k), sets.T[end_n, :k],None])
             L = tc.concatenate((w,tc.sqrt(1 - tc.bmm(w.permute(0,2,1),w))),1).squeeze(2)         
-            inverse_omp.step_cholesky(L,Linv) # Esto no toma en cuenta el end_n, necesitaria implementar el retornoy asignarlo al Linv
+            inverse_omp.step_cholesky(L,Linv[end_n]) # Esto no toma en cuenta el end_n, necesitaria implementar el retornoy asignarlo al Linv
         gamma[end_n,:k+1] = tc.gather(DTX, 1, sets.T[end_n,:k+1]) 
         gamma[end_n,:k+1,None] = tc.bmm(tc.bmm(Linv[end_n,:k+1,:k+1].transpose(1,2), Linv[end_n,:k+1,:k+1]), gamma[end_n,:k+1,None])              
         residuo[:,end_n] = y[:,end_n] - tc.bmm(gamma[end_n,None,:k+1],X.T[sets.T[end_n, :k+1], :]).permute(1,2,0)[0]
@@ -111,7 +111,7 @@ def omp_v4(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
     return dense_tensor
 
 
-def omp_batch(X, Y, n_nonzero_coefs, batch_size=1000, **kwargs):
+def omp_batch(X, Y, n_nonzero_coefs, batch_size=20000, **kwargs):
     """
     Procesa múltiples señales en lotes para manejar datasets grandes.
     

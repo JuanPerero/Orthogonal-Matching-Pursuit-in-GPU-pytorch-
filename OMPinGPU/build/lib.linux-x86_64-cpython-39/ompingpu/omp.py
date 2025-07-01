@@ -111,7 +111,7 @@ def omp_v4(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
     return dense_tensor
 
 
-def omp_batch(X, Y, n_nonzero_coefs, batch_size=1000, **kwargs):
+def omp_batch(X, Y, n_nonzero_coefs, batch_size=20000, **kwargs):
     """
     Procesa múltiples señales en lotes para manejar datasets grandes.
     
