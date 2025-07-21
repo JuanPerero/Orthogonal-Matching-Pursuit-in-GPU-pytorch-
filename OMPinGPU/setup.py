@@ -127,7 +127,7 @@ def get_extension_modules():
     
     # Detectar compute capability automáticamente
     extra_compile_args = {
-        'cxx': ['-O3', '-std=c++14', '-fopenmp'],  # Añadir OpenMP
+        'cxx': ['-O3', '-std=c++17', '-fopenmp'],  # Añadir OpenMP
         'nvcc': ['-O3', '--use_fast_math']
     }
     
