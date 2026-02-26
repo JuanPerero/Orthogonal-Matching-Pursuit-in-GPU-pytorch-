@@ -53,7 +53,6 @@ void step_cholesky_kernel(Types * d_A, Types * d_B, Types * d_R, int N, int M, i
     }
     
     // Sincronizar el dispositivo
-    #ifdef DEBUG
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         printf("Error en sincronización: %s\n", cudaGetErrorString(err));
@@ -136,7 +135,6 @@ void step_fb_coeficients_kernel(
         printf("Error al lanzar batch_forward_substitution_kernel: %s\n", cudaGetErrorString(err));
         return;
     }
-    #ifdef DEBUG
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         printf("Error en sincronización: %s\n", cudaGetErrorString(err));
@@ -191,7 +189,7 @@ void step_cholesky_w_forward_kernel(
         printf("Error al lanzar kernel: %s\n", cudaGetErrorString(err));
         return;
     }
-    #ifdef DEBUG
+
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         printf("Error en sincronización: %s\n", cudaGetErrorString(err));

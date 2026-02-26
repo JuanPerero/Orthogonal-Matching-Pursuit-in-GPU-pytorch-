@@ -7,11 +7,9 @@ torch::Tensor step_cholesky(torch::Tensor A, torch::Tensor B) {
  
     TORCH_CHECK(A.is_cuda(), "A debe estar en GPU");
     TORCH_CHECK(B.is_cuda(), "B debe estar en GPU");
-    TORCH_CHECK(R.is_cuda(), "R debe estar en GPU");
     TORCH_CHECK(A.is_contiguous(), "A debe ser contiguo");
     TORCH_CHECK(B.is_contiguous(), "B debe ser contiguo");
-    TORCH_CHECK(R.is_contiguous(), "R debe ser contiguo");
-      
+          
     if (A.dim() != 2 || B.dim() != 3) {
         throw std::runtime_error("A debe ser 2D y B debe ser 3D");
     }
@@ -48,9 +46,9 @@ torch::Tensor step_cholesky(torch::Tensor A, torch::Tensor B) {
 
 void step_cholesky_w_forward(torch::Tensor L, torch::Tensor B) {
     TORCH_CHECK(L.is_cuda(), "L debe estar en GPU");
-    TORCH_CHECK(b.is_cuda(), "b debe estar en GPU");
+    TORCH_CHECK(B.is_cuda(), "b debe estar en GPU");
     TORCH_CHECK(L.is_contiguous(), "L debe ser contiguo");
-    TORCH_CHECK(b.is_contiguous(), "b debe ser contiguo");
+    TORCH_CHECK(B.is_contiguous(), "b debe ser contiguo");
 
     int M = L.size(0);      // Cantidad de señales a procesar
     int full_dim = L.size(1);      // Dimensión completa de la matriz L 
@@ -83,9 +81,6 @@ void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torc
     int fdim = A.size(1);      // Dimensión completa de la matriz L
     int step_iter = B.size(1); // Paso del algoritmo, con la cantidad de elementos en DTX se puede saber
 
-    //printf("\n Debug: Cantidad de señales M: %d \n", M);
-    //printf("\n Debug: Dimension completa: %d \n", fdim);
-    //printf("\n Debug: Tamaño de B: %d \n", step_iter);
     AT_DISPATCH_FLOATING_TYPES(A.scalar_type(), "step_fb_coeficients",
                 ([&] {
                     step_fb_coeficients_kernel<scalar_t>(
@@ -99,8 +94,6 @@ void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torc
             );
 }
 
-// NO DEBERIA TENER UN cuda.synchronize()??
-
 // ----------------------------             ###############
 // ----------------------------             ###############
 // ----------------------------             ###############
@@ -113,7 +106,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("A"), py::arg("B"));
     m.def("step_cholesky_w_forward", &step_cholesky_w_forward,
           "Actualización de W usando método de forward para Cholesky",
-          py::arg("A"), py::arg("B"));
+          py::arg("L"), py::arg("B"));
     m.def("step_fb_coeficients", &step_fb_coeficients,
           "Cálculo de coeficientes usando método forward-backward",
           py::arg("A"), py::arg("B"), py::arg("C"), py::arg("D"));

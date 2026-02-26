@@ -6,7 +6,7 @@ import torch as tc
 import warnings
 
 try:
-    from .cuda import inverse_omp
+    from .cuda.inverse_omp import step_cholesky, step_cholesky_w_forward, step_fb_coeficients
     CUDA_EXTENSIONS = True
 except ImportError:
     CUDA_EXTENSIONS = False
@@ -70,7 +70,7 @@ def omp_v4(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
                 ctrl_end = end_n.sum()
             w =  tc.bmm(Linv[end_n,:k,:k],XTX[sets[k, end_n].unsqueeze(1).expand(-1, k), sets.T[end_n, :k],None])
             L = tc.concatenate((w,tc.sqrt(1 - tc.bmm(w.permute(0,2,1),w))),1).squeeze(2)         
-            inverse_omp.step_cholesky(L,Linv) # Correccion realizada para considerar muestras finalizadas y modificar directamente Linv, lo que no sucedia con linv[end_n]
+            step_cholesky(L,Linv) # Correccion realizada para considerar muestras finalizadas y modificar directamente Linv, lo que no sucedia con linv[end_n]
         gamma[end_n,:k+1] = tc.gather(DTX, 1, sets.T[end_n,:k+1]) 
         gamma[end_n,:k+1,None] = tc.bmm(tc.bmm(Linv[end_n,:k+1,:k+1].transpose(1,2), Linv[end_n,:k+1,:k+1]), gamma[end_n,:k+1,None])              
         residuo[:,end_n] = y[:,end_n] - tc.bmm(gamma[end_n,None,:k+1],X.T[sets.T[end_n, :k+1], :]).permute(1,2,0)[0]
@@ -158,7 +158,7 @@ def omp_v5_inv(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             w = tc.bmm(Linv[:, :k, :k], gram_block)  # (n_active, k, 1)
             diag = tc.sqrt(tc.clamp(1 - (w**2).sum(2, keepdim=True), min=1e-10))
             L = tc.concatenate((w, diag), 1).squeeze(2)  # (n_active, k+1)
-            inverse_omp(L, Linv) 
+            step_cholesky(L, Linv) 
         gamma[active_signals, :k+1] = tc.gather(DTX, 1, sets.T[active_signals, :k+1])
         gamma[active_signals, :k+1, None] = tc.bmm(
             tc.bmm(Linv[:, :k+1, :k+1].transpose(1, 2), Linv[:, :k+1, :k+1]),
@@ -321,7 +321,7 @@ def omp_batch(X, Y, n_nonzero_coefs, batch_size=20000, method="inv", **kwargs):
     for i in range(0, n_signals, batch_size):
         end_idx = min(i + batch_size, n_signals)
         y_batch = Y[:, i:end_idx]
-        result_batch = omp_v5_func(X, y_batch, n_nonzero_coefs=n_nonzero_coefs, **kwargs)
+        result_batch = omp_v5_func(X, y_batch, n_nonzero_coefs=n_nonzero_coefs, device=device, **kwargs)
         output[i:end_idx] = result_batch
         tc.cuda.empty_cache()
     if tc.isnan(output).any():

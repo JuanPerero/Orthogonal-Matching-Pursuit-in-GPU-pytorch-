@@ -3,3 +3,4 @@ OMPinGPU/ompingpu.egg-info
 DebucCUDACODE/*
 */__pycache__/*
 Benchmarks/*
+TestComparativos/*
