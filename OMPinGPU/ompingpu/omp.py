@@ -38,30 +38,6 @@ def omp_v4(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
         Coeficientes sparse de forma (n_signals, n_features)
     """
     
-    # Validación de entrada
-    if not isinstance(X, tc.Tensor) or not isinstance(y, tc.Tensor):
-        raise TypeError("X e y deben ser torch.Tensor")
-    
-    if X.dim() != 2 or y.dim() != 2:
-        raise ValueError("X debe ser 2D y y debe ser 2D")
-        
-    if X.size(0) != y.size(0):
-        raise ValueError("X e y deben tener el mismo número de filas")
-    
-    if X.device != y.device:
-            raise ValueError(f"X e y deben estar en el mismo dispositivo (X: {X.device}, y: {y.device})")
-
-    # Determinar el dispositivo a usar
-    if device is None:
-        device = X.device
-    
-    if XTX is None:
-        XTX = X.T @ X    
-    else:
-        if not XTX.size(0) == X.size(1) and XTX.size(1) == X.size(1):
-            print("XTX debe ser una matriz cuadrada del tamaño igual a la cantidad de atomos del diccionario")
-        XTX = XTX.to(device)
-    
     B = y.shape[1]  # cantidad de señales
     DTX = y.T @ X   # Correlación
     residuo = y.clone()
@@ -114,7 +90,179 @@ def omp_v4(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
     return dense_tensor
 
 
-def omp_batch(X, Y, n_nonzero_coefs, batch_size=20000, **kwargs):
+def omp_v5_inv(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
+    """
+    OMP v5 - Versión IDÉNTICA a v4 con optimizaciones de memoria.
+    Parameters:
+    -----------
+    X : torch.Tensor (n_samples, n_features)
+    y : torch.Tensor (n_samples, n_signals)
+    XTX : torch.Tensor, optional (n_features, n_features)
+    n_nonzero_coefs : int
+    tol : float, default=1e-2
+    device : str, optional
+        
+    Returns:
+    --------
+    torch.Tensor (n_signals, n_features)
+    """
+    # ===== PRE-CÓMPUTO =====
+    n_samples, n_features = X.shape
+    n_signals = y.shape[1]
+    
+    if XTX is None:
+        XTX = X.T @ X    
+    
+    
+    # ===== INICIALIZACIÓN CON BUFFERS REUTILIZABLES =====
+    DTX = y.T @ X  # (n_signals, n_atoms)
+    residuo = y.clone()
+    limit_position = n_features
+    sets = tc.full((n_nonzero_coefs, n_signals), limit_position, dtype=tc.int64, device=device)
+    gamma = tc.zeros(n_signals, n_nonzero_coefs, device=device, dtype=y.dtype)
+    Linv = tc.zeros(n_signals, n_nonzero_coefs, n_nonzero_coefs, device=device, dtype=y.dtype)
+    Linv[:, 0, 0] = 1
+    # Máscaras
+    bool_ctrl = tc.ones(n_signals, n_features, dtype=tc.bool, device=device)
+    active_signals = tc.ones(n_signals, dtype=tc.bool, device=device)
+    # ===== VARIABLES DE CONTROL (como v4) =====
+    ctrl_end = active_signals.sum()
+    end_fixed = active_signals.clone()
+    # ===== LOOP PRINCIPAL =====
+    for k in range(n_nonzero_coefs):
+        if not active_signals.any():
+            break
+        correlation = X.T @ residuo
+        best_atoms = correlation.abs().argmax(dim=0)  # (n_signals,)
+        sets[k] = best_atoms
+        active_signals = active_signals.logical_and(
+            bool_ctrl.gather(1, sets[k].unsqueeze(1)).squeeze()
+        )
+        bool_ctrl.scatter_(1, sets[k].unsqueeze(1), False)
+        limit_position = n_features
+        if tc.any(~active_signals):
+            sets[k, ~active_signals] = limit_position
+        if active_signals.sum() == 0:
+            break
+        if k > 0:
+            if ctrl_end != active_signals.sum():
+                Linv = Linv[active_signals[end_fixed]]
+                ctrl_end = active_signals.sum()
+                end_fixed = active_signals.clone()
+            gram_block = XTX[
+                sets[k, active_signals].unsqueeze(1).expand(-1, k),
+                sets.T[active_signals, :k],  
+                None
+            ]
+            # === Cholesky update ===
+            w = tc.bmm(Linv[:, :k, :k], gram_block)  # (n_active, k, 1)
+            diag = tc.sqrt(tc.clamp(1 - (w**2).sum(2, keepdim=True), min=1e-10))
+            L = tc.concatenate((w, diag), 1).squeeze(2)  # (n_active, k+1)
+            inverse_omp(L, Linv) 
+        gamma[active_signals, :k+1] = tc.gather(DTX, 1, sets.T[active_signals, :k+1])
+        gamma[active_signals, :k+1, None] = tc.bmm(
+            tc.bmm(Linv[:, :k+1, :k+1].transpose(1, 2), Linv[:, :k+1, :k+1]),
+            gamma[active_signals, :k+1, None]
+        )
+        residuo[:, active_signals] = y[:, active_signals] - tc.bmm(
+            gamma[active_signals, None, :k+1],
+            X.T[sets.T[active_signals, :k+1], :]
+        ).permute(1, 2, 0)[0]          
+    # ===== LIMPIAR MEMORIA =====
+    del Linv
+    tc.cuda.empty_cache()
+    indx = tc.arange(n_signals, device=device).repeat(n_nonzero_coefs, 1).T.flatten()
+    indx = tc.vstack((indx, sets.T.flatten())) 
+    output = tc.zeros(n_signals, n_features + 1, dtype=y.dtype, device=device)
+    output[indx[0], indx[1]] = gamma.flatten()
+    output = output[:, :-1]
+    return output
+
+
+
+
+def omp_v5_fb(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
+    # ===== PRE-CÓMPUTO =====
+    n_samples, n_features = X.shape
+    n_signals = y.shape[1]
+    
+    if XTX is None:
+        XTX = X.T @ X    
+    
+    
+    # ===== INICIALIZACIÓN CON BUFFERS REUTILIZABLES =====
+    DTX = y.T @ X  # (n_signals, n_atoms)
+    residuo = y.clone()
+    limit_position = n_features
+    sets = tc.full((n_nonzero_coefs, n_signals), limit_position, dtype=tc.int64, device=device)
+    gamma = tc.zeros(n_signals, n_nonzero_coefs, device=device, dtype=y.dtype)
+    
+    L_batch = tc.zeros(n_signals, n_nonzero_coefs, n_nonzero_coefs, device=device, dtype=y.dtype)
+    L_batch[:, 0, 0] = 1
+
+    Fordward_buffer = tc.zeros(n_signals, n_nonzero_coefs, device=device, dtype=y.dtype)    # Controlar si es de este tamaño
+    
+    # Máscaras
+    bool_ctrl = tc.ones(n_signals, n_features, dtype=tc.bool, device=device)
+    active_signals = tc.ones(n_signals, dtype=tc.bool, device=device)
+    # ===== VARIABLES DE CONTROL (como v4) =====
+    ctrl_end = active_signals.sum()
+    end_fixed = active_signals.clone()
+    # ===== LOOP PRINCIPAL =====
+    for k in range(n_nonzero_coefs):
+        if not active_signals.any():
+            break
+        correlation = X.T @ residuo
+        best_atoms = correlation.abs().argmax(dim=0)  # (n_signals,)
+        sets[k] = best_atoms
+        active_signals = active_signals.logical_and(
+            bool_ctrl.gather(1, sets[k].unsqueeze(1)).squeeze()
+        )
+        bool_ctrl.scatter_(1, sets[k].unsqueeze(1), False)
+        limit_position = n_features
+        if tc.any(~active_signals):
+            sets[k, ~active_signals] = limit_position
+        if active_signals.sum() == 0:
+            break
+        if k > 0:
+            if ctrl_end != active_signals.sum():
+                L_batch = L_batch[active_signals[end_fixed]]
+                Fordward_buffer = Fordward_buffer[active_signals[end_fixed]]
+                ctrl_end = active_signals.sum()
+                end_fixed = active_signals.clone()
+            gram_block = XTX[
+                sets[k, active_signals].unsqueeze(1).expand(-1, k),
+                sets.T[active_signals, :k]]  # gram_block (n_active, k)
+            
+            # === Cholesky update with forward method ===          
+            #w = tc.bmm(Linv[:, :k, :k], gram_block)  # (n_active, k, 1)
+            step_cholesky_w_forward(L_batch, gram_block)
+            w = L_batch[:, :k+1, :k+1]
+            diag = tc.sqrt(tc.clamp(1 - (w**2).sum(2, keepdim=True), min=1e-10))
+            L = tc.concatenate((w, diag), 1).squeeze(2)  # (n_active, k+1)
+            
+            
+        # Adaptar al formato Forward-Backward
+        step_fb_coeficients(L_batch, DTX[active_signals, :k+1], Fordward_buffer, gamma[active_signals, :k+1]) # Verificar si gamma es una copia o se modifica in-place
+        residuo[:, active_signals] = y[:, active_signals] - tc.bmm(
+            gamma[active_signals, None, :k+1],
+            X.T[sets.T[active_signals, :k+1], :]
+        ).permute(1, 2, 0)[0]          
+    # ===== LIMPIAR MEMORIA =====
+    del Linv
+    tc.cuda.empty_cache()
+    indx = tc.arange(n_signals, device=device).repeat(n_nonzero_coefs, 1).T.flatten()
+    indx = tc.vstack((indx, sets.T.flatten())) 
+    output = tc.zeros(n_signals, n_features + 1, dtype=y.dtype, device=device)
+    output[indx[0], indx[1]] = gamma.flatten()
+    output = output[:, :-1]
+    return output
+
+
+
+
+
+def omp_batch(X, Y, n_nonzero_coefs, batch_size=20000, method="inv", **kwargs):
     """
     Procesa múltiples señales en lotes para manejar datasets grandes.
     
@@ -136,22 +284,57 @@ def omp_batch(X, Y, n_nonzero_coefs, batch_size=20000, **kwargs):
     torch.Tensor
         Coeficientes para todas las señales
     """
-    n_signals = Y.size(1)
-    results = []
+
+    if method == "inv":
+        omp_v5_func = omp_v5_inv
+    elif method == "fb":
+        omp_v5_func = omp_v4  # Aquí se podría implementar una versión forward-backward si se desea
+    else:
+        raise ValueError("Método no reconocido. Use 'inv' o 'fb'.")
+
+    # Validación de entrada
+    if not isinstance(X, tc.Tensor):
+        raise TypeError("X debe ser torch.Tensor")
+    if not isinstance(Y, tc.Tensor):
+        raise TypeError("Y debe ser torch.Tensor")
+    if X.dim() != 2:
+        raise ValueError("X debe ser 2D")
+    if Y.dim() != 2:
+        raise ValueError("Y debe ser 2D")
+    if X.size(0) != Y.size(0):
+        raise ValueError("X e Y deben tener el mismo número de filas")
+    if X.device != Y.device:
+        raise ValueError(f"X e Y deben estar en el mismo dispositivo (X: {X.device}, Y: {Y.device})")
+    if not isinstance(n_nonzero_coefs, int) or n_nonzero_coefs <= 0:
+        raise ValueError("n_nonzero_coefs debe ser un entero positivo")
+    if not isinstance(batch_size, int) or batch_size <= 0:
+        raise ValueError("batch_size debe ser un entero positivo")
+    if Y.size(1) == 0:
+        raise ValueError("Y debe contener al menos una señal (columnas)")
     
+    n_signals = Y.size(1)
+    n_features = X.size(1)
+    device = Y.device
+
+    # Preasignar tensor de salida
+    output = tc.zeros(n_signals, n_features, device=device, dtype=Y.dtype)
     for i in range(0, n_signals, batch_size):
         end_idx = min(i + batch_size, n_signals)
         y_batch = Y[:, i:end_idx]
-        
-        result_batch = omp_v4(X, y_batch, n_nonzero_coefs=n_nonzero_coefs, **kwargs)
-        results.append(result_batch)
-        
-        # Limpiar memoria después de cada lote
+        result_batch = omp_v5_func(X, y_batch, n_nonzero_coefs=n_nonzero_coefs, **kwargs)
+        output[i:end_idx] = result_batch
         tc.cuda.empty_cache()
-    
-    return tc.cat(results, dim=0)
-
+    if tc.isnan(output).any():
+        print("Warning: NaN values detected in the output. Consider increasing the tolerance or checking the input data.")
+    return output
 
 def onlyinverse(L1,L2):
     inverse_omp.step_cholesky(L1,L2)
     return 
+
+
+### Lista de modificaciones realizadas:
+# - Se agregó validación de entrada para asegurar que X e y sean tensores de pytorch
+# - Control de valores NaN en la salida, con una advertencia para el usuario
+# - Planteo de procesamiento con la funcion fordward-backward
+
