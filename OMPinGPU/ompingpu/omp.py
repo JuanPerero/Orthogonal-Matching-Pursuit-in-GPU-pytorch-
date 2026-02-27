@@ -139,7 +139,7 @@ def omp_v5_inv(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             bool_ctrl.gather(1, sets[k].unsqueeze(1)).squeeze()
         )
         bool_ctrl.scatter_(1, sets[k].unsqueeze(1), False)
-        limit_position = n_features
+        limit_position = n_features                     # Creo que esto esta de mas
         if tc.any(~active_signals):
             sets[k, ~active_signals] = limit_position
         if active_signals.sum() == 0:
@@ -156,7 +156,9 @@ def omp_v5_inv(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             ]
             # === Cholesky update ===
             w = tc.bmm(Linv[:, :k, :k], gram_block)  # (n_active, k, 1)
-            diag = tc.sqrt(tc.clamp(1 - (w**2).sum(2, keepdim=True), min=1e-10))
+            
+            diag = tc.sqrt(tc.clamp(1 - (w**2).sum(1, keepdim=True), min=1e-10))                  
+
             L = tc.concatenate((w, diag), 1).squeeze(2)  # (n_active, k+1)
             step_cholesky(L, Linv) 
         gamma[active_signals, :k+1] = tc.gather(DTX, 1, sets.T[active_signals, :k+1])
@@ -196,6 +198,7 @@ def omp_v5_fb(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
     limit_position = n_features
     sets = tc.full((n_nonzero_coefs, n_signals), limit_position, dtype=tc.int64, device=device)
     gamma = tc.zeros(n_signals, n_nonzero_coefs, device=device, dtype=y.dtype)
+    g_return = gamma.clone()
     
     L_batch = tc.zeros(n_signals, n_nonzero_coefs, n_nonzero_coefs, device=device, dtype=y.dtype)
     L_batch[:, 0, 0] = 1
@@ -228,6 +231,8 @@ def omp_v5_fb(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             if ctrl_end != active_signals.sum():
                 L_batch = L_batch[active_signals[end_fixed]]
                 Fordward_buffer = Fordward_buffer[active_signals[end_fixed]]
+                g_return[~end_fixed] = gamma[~active_signals[end_fixed]]
+
                 ctrl_end = active_signals.sum()
                 end_fixed = active_signals.clone()
             gram_block = XTX[
@@ -243,18 +248,17 @@ def omp_v5_fb(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             
             
         # Adaptar al formato Forward-Backward
-        step_fb_coeficients(L_batch, DTX[active_signals, :k+1], Fordward_buffer, gamma[active_signals, :k+1]) # Verificar si gamma es una copia o se modifica in-place
+        step_fb_coeficients(L_batch, DTX[active_signals, :k+1], Fordward_buffer, gamma)  #gamma[active_signals, :k+1]) 
         residuo[:, active_signals] = y[:, active_signals] - tc.bmm(
             gamma[active_signals, None, :k+1],
             X.T[sets.T[active_signals, :k+1], :]
-        ).permute(1, 2, 0)[0]          
-    # ===== LIMPIAR MEMORIA =====
-    del Linv
+        ).permute(1, 2, 0)[0]
+
     tc.cuda.empty_cache()
     indx = tc.arange(n_signals, device=device).repeat(n_nonzero_coefs, 1).T.flatten()
     indx = tc.vstack((indx, sets.T.flatten())) 
     output = tc.zeros(n_signals, n_features + 1, dtype=y.dtype, device=device)
-    output[indx[0], indx[1]] = gamma.flatten()
+    output[indx[0], indx[1]] = g_return.flatten() # gamma.flatten()
     output = output[:, :-1]
     return output
 
@@ -288,7 +292,7 @@ def omp_batch(X, Y, n_nonzero_coefs, batch_size=20000, method="inv", **kwargs):
     if method == "inv":
         omp_v5_func = omp_v5_inv
     elif method == "fb":
-        omp_v5_func = omp_v4  # Aquí se podría implementar una versión forward-backward si se desea
+        omp_v5_func = omp_v5_fb  # Aquí se podría implementar una versión forward-backward si se desea
     else:
         raise ValueError("Método no reconocido. Use 'inv' o 'fb'.")
 
