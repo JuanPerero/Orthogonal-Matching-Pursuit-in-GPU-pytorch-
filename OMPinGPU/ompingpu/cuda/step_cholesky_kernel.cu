@@ -92,7 +92,7 @@ __global__ void IncrementalForwBack(Types* d_L, Types* d_b, Types* d_forw_step, 
     if (batch_idx >= M) return;
 
     Types* L = d_L + batch_idx * fdim * fdim;
-    Types* b = d_b + batch_idx * step;
+    Types* b = d_b + batch_idx;                  // B, dada la reutilizacion del forward, solo recibe una columna con el numero para todas las muestras
     Types* forw_step = d_forw_step + batch_idx * fdim;  // Unidimensional con tamaño fdim, aunque sean ceros
     Types* x = d_x + batch_idx * fdim;                  // Unidimensional con tamaño fdim, aunque sean ceros   
 
@@ -103,7 +103,7 @@ __global__ void IncrementalForwBack(Types* d_L, Types* d_b, Types* d_forw_step, 
         Types sum = 0.0;
         for (int j = 0; j < step; j++)
             sum += L[step*fdim + j] * forw_step[j];
-            forw_step[step] = (b[step] - sum) / L[step*fdim + step];
+            forw_step[step] = (b[0] - sum) / L[step*fdim + step]; // Originalmente b[step] hasta la adaptacion forward
     }
 
     // ---------- Backward substitution ----------   

@@ -14,7 +14,7 @@ torch::Tensor step_cholesky(torch::Tensor A, torch::Tensor B);
 
 void step_cholesky_w_forward(torch::Tensor L, torch::Tensor B);
 
-void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor D);
+void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor D, int step_iter);
 
 // Declaración de la función CUDA (implementada en step_cholesky_kernel.cu)
 template <typename T>

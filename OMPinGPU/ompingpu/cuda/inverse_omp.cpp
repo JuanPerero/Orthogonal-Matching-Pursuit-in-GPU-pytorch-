@@ -71,7 +71,7 @@ void step_cholesky_w_forward(torch::Tensor L, torch::Tensor B) {
 // ----------------------------             ###############
 // ----------------------------             ###############
 
-void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor D) {
+void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torch::Tensor D, int step_iter) {
     // A -> matrix L
     // B -> DTX seccionada  -> se puede encontrar el step en base a su tamaño
     // C -> Forward previos
@@ -79,8 +79,9 @@ void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torc
 
     int M = A.size(0);      // Cantidad de señales a procesar
     int fdim = A.size(1);      // Dimensión completa de la matriz L
-    int step_iter = B.size(1); // Paso del algoritmo, con la cantidad de elementos en DTX se puede saber
+    //int step_iter = B.size(1); // Paso del algoritmo, con la cantidad de elementos en DTX se puede saber // Eliminado por el nuevo formato forward
 
+    // Sumar 1 a step_iter es necesario porque el paso 0 corresponde a la primera iteración (ya que step_iter empieza desde 0).
     AT_DISPATCH_FLOATING_TYPES(A.scalar_type(), "step_fb_coeficients",
                 ([&] {
                     step_fb_coeficients_kernel<scalar_t>(
@@ -88,7 +89,7 @@ void step_fb_coeficients(torch::Tensor A, torch::Tensor B, torch::Tensor C, torc
                         B.data_ptr<scalar_t>(),
                         C.data_ptr<scalar_t>(),
                         D.data_ptr<scalar_t>(),
-                        M, step_iter, fdim
+                        M, step_iter+1, fdim    
                     );
                 })
             );
@@ -109,5 +110,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("L"), py::arg("B"));
     m.def("step_fb_coeficients", &step_fb_coeficients,
           "Cálculo de coeficientes usando método forward-backward",
-          py::arg("A"), py::arg("B"), py::arg("C"), py::arg("D"));
+          py::arg("A"), py::arg("B"), py::arg("C"), py::arg("D"), py::arg("step_iter"));
 }

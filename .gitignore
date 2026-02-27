@@ -1,6 +1,10 @@
-OMPinGPU/build/*
+OMPinGPU/build/
+OMPinGPU/build/**
 OMPinGPU/ompingpu.egg-info
 DebucCUDACODE/*
-*/__pycache__/*
+**/__pycache__/*
 Benchmarks/*
 TestComparativos/*
+OMPinGPU/ompingpu/cuda/.*
+*.o
+*.so

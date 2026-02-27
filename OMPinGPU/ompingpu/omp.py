@@ -167,9 +167,7 @@ def omp_v5_inv(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             gamma[active_signals, :k+1, None]
         )
         residuo[:, active_signals] = y[:, active_signals] - tc.bmm(
-            gamma[active_signals, None, :k+1],
-            X.T[sets.T[active_signals, :k+1], :]
-        ).permute(1, 2, 0)[0]          
+            gamma[active_signals, None, :k+1], X.T[sets.T[active_signals, :k+1], :]).permute(1, 2, 0)[0]          
     # ===== LIMPIAR MEMORIA =====
     del Linv
     tc.cuda.empty_cache()
@@ -231,7 +229,7 @@ def omp_v5_fb(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             if ctrl_end != active_signals.sum():
                 L_batch = L_batch[active_signals[end_fixed]]
                 Fordward_buffer = Fordward_buffer[active_signals[end_fixed]]
-                g_return[~end_fixed] = gamma[~active_signals[end_fixed]]
+                g_return[~active_signals] = gamma[~active_signals]
 
                 ctrl_end = active_signals.sum()
                 end_fixed = active_signals.clone()
@@ -242,18 +240,25 @@ def omp_v5_fb(X, y, XTX=None, n_nonzero_coefs=None, tol=1e-2, device=None):
             # === Cholesky update with forward method ===          
             #w = tc.bmm(Linv[:, :k, :k], gram_block)  # (n_active, k, 1)
             step_cholesky_w_forward(L_batch, gram_block)
-            w = L_batch[:, :k+1, :k+1]
-            diag = tc.sqrt(tc.clamp(1 - (w**2).sum(2, keepdim=True), min=1e-10))
-            L = tc.concatenate((w, diag), 1).squeeze(2)  # (n_active, k+1)
+            w = L_batch[:, k, :k]
+            #diag = tc.sqrt(tc.clamp(1 - (w**2).sum(1, keepdim=True), min=1e-10))
+            L_batch[:, k, k] = tc.sqrt(tc.clamp(1 - (w**2).sum(1, keepdim=True), min=1e-10)).T[0]
+            #L = tc.concatenate((w, diag), 1).squeeze(2)  # (n_active, k+1)
             
             
         # Adaptar al formato Forward-Backward
-        step_fb_coeficients(L_batch, DTX[active_signals, :k+1], Fordward_buffer, gamma)  #gamma[active_signals, :k+1]) 
+        # tc.gather(DTX, 1, sets.T[active_signals, :k+1]) # Retorna toda la matriz de correlacion, pero solo se usa en el forward. Entonces no es necesario
+        # Puede modificarse entonces solo la nueva columna ":k+1" -> "k"   resulta en la funcion # tc.gather(DTX, 1, sets.T[active_signals, :k+1])
+        # Con adaptacion de las lineas para aclarar
+        dtx_indx = sets[k, active_signals].unsqueeze(1)
+        step_fb_coeficients(L_batch, DTX.gather(1, dtx_indx), Fordward_buffer, gamma, k)  #gamma[active_signals, :k+1]) 
         residuo[:, active_signals] = y[:, active_signals] - tc.bmm(
             gamma[active_signals, None, :k+1],
             X.T[sets.T[active_signals, :k+1], :]
         ).permute(1, 2, 0)[0]
 
+
+    g_return[end_fixed] = gamma[end_fixed]
     tc.cuda.empty_cache()
     indx = tc.arange(n_signals, device=device).repeat(n_nonzero_coefs, 1).T.flatten()
     indx = tc.vstack((indx, sets.T.flatten())) 
